@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>暗室現像・定着タイマー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+<div class="max-w-2xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-center text-amber-400 mb-1">🔭 暗室現像タイマー</h1>
+  <p class="text-center text-gray-500 mb-4 text-sm">フィルム現像・停止・定着・水洗いの各ステップを管理</p>
+
+  <!-- Developer & Temp selector -->
+  <div class="bg-gray-900 rounded-xl p-4 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">現像液</label>
+        <select id="developer" onchange="updateTimes()" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="d76">D-76 (1:1)</option>
+          <option value="d76s">D-76 (原液)</option>
+          <option value="rodinal">Rodinal (1:50)</option>
+          <option value="hc110">HC-110 (B)</option>
+          <option value="id11">ID-11</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">温度</label>
+        <select id="temp" onchange="updateTimes()" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="18">18°C</option>
+          <option value="20" selected>20°C</option>
+          <option value="22">22°C</option>
+          <option value="24">24°C</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <label class="text-xs text-gray-400 block mb-1">フィルム感度</label>
+      <select id="iso" onchange="updateTimes()" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+        <option value="100">ISO 100</option>
+        <option value="400" selected>ISO 400</option>
+        <option value="800">ISO 800/1600</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Steps -->
+  <div id="steps-list" class="space-y-2 mb-4"></div>
+
+  <!-- Active timer -->
+  <div id="active-panel" class="bg-gray-900 rounded-xl p-4 hidden">
+    <div class="text-center">
+      <div id="active-name" class="text-lg font-bold text-amber-300 mb-1"></div>
+      <div id="active-timer" class="text-6xl font-mono font-bold text-white mb-2"></div>
+      <div id="agitate-info" class="text-sm text-gray-400 mb-3"></div>
+      <div class="flex gap-2 justify-center">
+        <button onclick="pauseResume()" id="pause-btn" class="px-6 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg font-semibold" aria-label="一時停止/再開">一時停止</button>
+        <button onclick="stopStep()" class="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold" aria-label="ステップをスキップ">スキップ</button>
+      </div>
+    </div>
+  </div>
+  <div id="start-panel" class="text-center">
+    <button onclick="startProcess()" class="px-8 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-lg" aria-label="現像プロセスを開始">現像プロセス開始</button>
+  </div>
+  <div id="done-panel" class="hidden text-center bg-green-900/50 rounded-xl p-6">
+    <div class="text-3xl mb-2">✅</div>
+    <div class="text-xl font-bold text-green-300">全ステップ完了！</div>
+    <div class="text-sm text-gray-400 mt-1">フィルムを明室で取り出してください</div>
+    <button onclick="resetProcess()" class="mt-3 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg" aria-label="最初からやり直す">最初からやり直す</button>
+  </div>
+</div>
+
+<script>
+const devTimes = {
+  d76:  { 100: {18:11,20:9,22:7.5,24:6.5}, 400: {18:14,20:11,22:9,24:8}, 800: {18:18,20:14,22:11.5,24:10} },
+  d76s: { 100: {18:7,20:6,22:5,24:4}, 400: {18:9,20:7.5,22:6,24:5}, 800: {18:11,20:9,22:7.5,24:6} },
+  rodinal: { 100: {18:17,20:14,22:12,24:10}, 400: {18:21,20:17,22:14,24:12}, 800: {18:25,20:20,22:17,24:14} },
+  hc110: { 100: {18:9,20:7,22:6,24:5}, 400: {18:11,20:9,22:7.5,24:6.5}, 800: {18:14,20:11,22:9,24:8} },
+  id11: { 100: {18:11,20:9,22:7.5,24:6}, 400: {18:14,20:11,22:9,24:8}, 800: {18:17,20:14,22:11.5,24:10} }
+};
+
+let steps = [];
+let currentStep = 0;
+let remaining = 0;
+let interval = null;
+let paused = false;
+let agitateIntervals = [];
+
+function getSteps() {
+  const dev = document.getElementById('developer').value;
+  const temp = parseInt(document.getElementById('temp').value);
+  const iso = document.getElementById('iso').value;
+  const devMin = devTimes[dev]?.[iso]?.[temp] || 10;
+  return [
+    { name: '現像', emoji: '🧪', duration: devMin * 60, agitate: 30, agitateFirst: 30, color: 'amber', note: '最初30秒連続撹拌、以後30秒毎に5秒撹拌' },
+    { name: '停止浴', emoji: '⛔', duration: 60, agitate: 0, color: 'yellow', note: '30秒連続撹拌して現像を停止' },
+    { name: '定着', emoji: '🔒', duration: 5 * 60, agitate: 30, agitateFirst: 60, color: 'blue', note: '最初60秒連続撹拌、以後30秒毎に5秒撹拌' },
+    { name: '水洗い', emoji: '💧', duration: 20 * 60, agitate: 0, color: 'cyan', note: '流水or回数水洗いで定着液を完全除去' },
+    { name: '水切り剤', emoji: '✨', duration: 60, agitate: 0, color: 'green', note: 'フォトフロ等に30秒浸漬' },
+  ];
+}
+
+function fmt(s) {
+  const m = Math.floor(s/60), sec = s%60;
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+function updateTimes() {
+  steps = getSteps();
+  renderSteps();
+}
+
+function renderSteps() {
+  const el = document.getElementById('steps-list');
+  const colorMap = { amber:'bg-amber-900/40 border-amber-700', yellow:'bg-yellow-900/40 border-yellow-700', blue:'bg-blue-900/40 border-blue-700', cyan:'bg-cyan-900/40 border-cyan-700', green:'bg-green-900/40 border-green-700' };
+  el.innerHTML = steps.map((s, i) => `
+    <div class="flex items-center gap-3 ${colorMap[s.color]} border rounded-lg px-4 py-2 ${i === currentStep && interval ? 'ring-2 ring-white' : ''}">
+      <span class="text-xl">${s.emoji}</span>
+      <div class="flex-1">
+        <div class="font-semibold text-sm">${s.name}</div>
+        <div class="text-xs text-gray-400">${s.note}</div>
+      </div>
+      <div class="font-mono font-bold text-lg">${fmt(s.duration)}</div>
+      ${i < currentStep ? '<span class="text-green-400 text-xs font-bold">完了</span>' : ''}
+    </div>
+  `).join('');
+}
+
+function startProcess() {
+  currentStep = 0;
+  document.getElementById('start-panel').classList.add('hidden');
+  document.getElementById('done-panel').classList.add('hidden');
+  startStep();
+}
+
+function startStep() {
+  if (currentStep >= steps.length) {
+    document.getElementById('active-panel').classList.add('hidden');
+    document.getElementById('done-panel').classList.remove('hidden');
+    return;
+  }
+  const s = steps[currentStep];
+  remaining = s.duration;
+  paused = false;
+  document.getElementById('active-panel').classList.remove('hidden');
+  document.getElementById('active-name').textContent = s.emoji + ' ' + s.name;
+  document.getElementById('agitate-info').textContent = s.note;
+  renderSteps();
+  clearInterval(interval);
+  interval = setInterval(() => {
+    if (!paused) {
+      remaining--;
+      document.getElementById('active-timer').textContent = fmt(remaining);
+      // agitate reminder
+      if (s.agitate > 0 && remaining > 0 && remaining % s.agitate === 0) {
+        document.getElementById('agitate-info').textContent = '⚡ 撹拌してください！';
+        setTimeout(() => document.getElementById('agitate-info').textContent = s.note, 3000);
+      }
+      if (remaining <= 0) {
+        clearInterval(interval);
+        document.getElementById('agitate-info').textContent = '✅ ステップ完了 → 次のステップへ';
+        currentStep++;
+        setTimeout(startStep, 1500);
+      }
+    }
+    document.getElementById('active-timer').textContent = fmt(remaining);
+  }, 1000);
+  document.getElementById('active-timer').textContent = fmt(remaining);
+}
+
+function pauseResume() {
+  paused = !paused;
+  document.getElementById('pause-btn').textContent = paused ? '再開' : '一時停止';
+}
+function stopStep() {
+  clearInterval(interval);
+  currentStep++;
+  startStep();
+}
+function resetProcess() {
+  clearInterval(interval);
+  currentStep = 0; remaining = 0; paused = false;
+  document.getElementById('active-panel').classList.add('hidden');
+  document.getElementById('done-panel').classList.add('hidden');
+  document.getElementById('start-panel').classList.remove('hidden');
+  updateTimes();
+}
+
+updateTimes();
+</script>
+</body>
+</html>
